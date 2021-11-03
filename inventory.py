@@ -1,5 +1,6 @@
-import threading
 from time import sleep
+
+from utils import use_thread
 
 
 class InsufficientResourceException(Exception):
@@ -14,13 +15,8 @@ class InventoryService:
         self.financial_service = financial_service
         self.order_service = order_service
 
+    @use_thread
     def place_order(self, order_id, quantity):
-        print('Inventory service: starting thread to place order')
-        t = threading.Thread(target=self._place_order, args=(order_id, quantity))
-        t.start()
-        return
-
-    def _place_order(self, order_id, quantity):
         sleep(2)
         print('Inventory service: placing order')
         if self.total_quantity < quantity:
@@ -35,13 +31,8 @@ class InventoryService:
         except:
             self.rollback_order(order_id)
 
-    def _rollback_order(self, order_id):
+    @use_thread
+    def rollback_order(self, order_id):
         quantity = self.sold_quantity.pop(order_id)
         self.total_quantity += quantity
         self.financial_service.rollback_order(order_id)
-
-    def rollback_order(self, order_id):
-        print('Inventory service: starting thread to rollback order')
-        t = threading.Thread(target=self._rollback_order, args=(order_id,))
-        t.start()
-        return

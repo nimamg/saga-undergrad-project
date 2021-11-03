@@ -1,7 +1,8 @@
 from time import sleep
 
 from database import Database
-import threading
+
+from utils import use_thread
 
 ROLLED_BACK = 'rolled_back'
 COMMITTED = 'committed'
@@ -84,13 +85,8 @@ class FinancialService:
         self.order_service = order_service
         self.inventory_service = inventory_service
 
+    @use_thread
     def place_order(self, order_id, amount, account_id, quantity):
-        print('Financial service: starting thread')
-        t = threading.Thread(target=self._place_order, args=(order_id, amount, account_id, quantity))
-        t.start()
-        return
-
-    def _place_order(self, order_id, amount, account_id, quantity):
         sleep(2)
         print('Financial Service: placing order')
         try:
@@ -102,7 +98,8 @@ class FinancialService:
             print('Financial service: calling inventory failed with Insufficient Balance Exception, rejecting order')
             self.order_service.reject_order(order_id)
 
-    def _rollback_order(self, order_id):
+    @use_thread
+    def rollback_order(self, order_id):
         print('Financial service, rolling back order')
         try:
             transaction = self.db.get_transaction_by_order_id(order_id)
@@ -111,12 +108,6 @@ class FinancialService:
             print('Financial service: no such transaction found')
         print('Financial service, rejecting order in order service')
         self.order_service.reject_order(order_id)
-
-    def rollback_order(self, order_id):
-        print('Financial service: starting thread to rollback order')
-        t = threading.Thread(target=self._rollback_order, args=(order_id,))
-        t.start()
-        return
 
     def create_account(self, balance=100):
         return self.db.create_account(balance=balance)

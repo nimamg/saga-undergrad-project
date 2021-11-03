@@ -1,7 +1,7 @@
 from time import sleep
-import threading
 
 from database import Database
+from utils import use_thread
 
 PENDING = 'pending'
 SUCCESSFUL = 'successful'
@@ -17,7 +17,7 @@ class Order:
         self.id = _id
         self.quantity = quantity
         self.price = quantity * PRICE
-        self.status = 'pending'
+        self.status = PENDING
 
 
 class OrderDatabase(Database):
@@ -56,28 +56,19 @@ class OrderService:
             self.reject_order(order.id)
             raise Exception('Service Not Available')
 
-    def _complete_order(self, order_id):
+    @use_thread
+    def complete_order(self, order_id):
         print('Order Service: Completing order')
         order = self.db.get_order(order_id)
         if order.status != PENDING:
             raise Exception('Can\'t complete order')
         self.db.update_order(_id=order_id, status=SUCCESSFUL)
 
-    def complete_order(self, order_id):
-        print('Order service: starting thread to complete order')
-        t = threading.Thread(target=self._complete_order, args=(order_id,))
-        t.start()
-        return
-
-    def _reject_order(self, order_id):
+    @use_thread
+    def reject_order(self, order_id):
         print('Order Service: Rejecting order')
         order = self.db.get_order(order_id)
         if order.status == SUCCESSFUL:
             raise Exception
         self.db.update_order(_id=order_id, status=REJECTED)
 
-    def reject_order(self, order_id):
-        print('Order service: starting thread to reject order')
-        t = threading.Thread(target=self._reject_order, args=(order_id,))
-        t.start()
-        return
