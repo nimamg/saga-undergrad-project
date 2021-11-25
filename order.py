@@ -1,7 +1,7 @@
-from time import sleep
+import json
 
+from broker import RabbitWrapper, FINANCIAL_ORDER_QUEUE, TimeoutException, ORDER_SERVICE_RESPONSE_QUEUE, FINANCIAL_ROLLBACK_QUEUE, INVENTORY_ROLLBACK_QUEUE
 from database import Database
-from utils import use_thread
 
 PENDING = 'pending'
 SUCCESSFUL = 'successful'
@@ -28,35 +28,39 @@ class OrderDatabase(Database):
 
 
 class OrderService:
-    def __init__(self, db: OrderDatabase, financial_service=None):
-        self.financial_service = financial_service
+    def __init__(self, db: OrderDatabase, rabbit_interface: RabbitWrapper):
         self.db = db
+        self.rabbit_interface = rabbit_interface
 
     def place_order(self, quantity, account_id):
         print('Order Service: placing order')
         order = self.db.create_order(quantity)
         try:
             print('Order Service: calling financial')
-            self.financial_service.place_order(order.id, order.price, account_id, quantity)
+            message = {
+                'order_id': order.id,
+                'account_id': account_id,
+                'order_price': order.price,
+                'quantity': order.quantity,
+            }
+            self.rabbit_interface.publish(FINANCIAL_ORDER_QUEUE, json.dumps(message))
         except Exception as e:
-            print('Order Service: calling financial failed, ', str(e))
+            print('Order Service: publishing financial order failed, ', str(e))
             return 'Failure'
-        order_id = order.id
-        timer = TIMEOUT_SECONDS
-        while timer > 0:
-            order = self.db.get_order(order_id)
-            if order.status == SUCCESSFUL:
+        try:
+            response = json.loads(self.rabbit_interface.consume_one(
+                ORDER_SERVICE_RESPONSE_QUEUE.format(order_id=order.id), timeout=TIMEOUT_SECONDS))
+            # print(response)
+            if response['status'] == 'success':
+                self.complete_order(order.id)
                 return 'Success'
-            elif order.status == REJECTED:
+            else:
+                self.reject_order(order.id)
                 return 'Failure'
-            sleep(POLL_INTERVAL_SECONDS)
-            timer -= POLL_INTERVAL_SECONDS
-        else:
-            self.financial_service.rollback_order(order.id)
+        except TimeoutException:
             self.reject_order(order.id)
-            raise Exception('Service Not Available')
+            return 'Failure'
 
-    @use_thread
     def complete_order(self, order_id):
         print('Order Service: Completing order')
         order = self.db.get_order(order_id)
@@ -64,11 +68,11 @@ class OrderService:
             raise Exception('Can\'t complete order')
         self.db.update_order(_id=order_id, status=SUCCESSFUL)
 
-    @use_thread
     def reject_order(self, order_id):
         print('Order Service: Rejecting order')
+        self.rabbit_interface.publish(FINANCIAL_ROLLBACK_QUEUE, json.dumps({'order_id': order_id}))
+        self.rabbit_interface.publish(INVENTORY_ROLLBACK_QUEUE, json.dumps({'order_id': order_id}))
         order = self.db.get_order(order_id)
         if order.status == SUCCESSFUL:
             raise Exception
         self.db.update_order(_id=order_id, status=REJECTED)
-

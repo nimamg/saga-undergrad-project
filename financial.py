@@ -1,8 +1,8 @@
-from time import sleep
+import json
 
+from broker import (RabbitWrapper, FINANCIAL_ORDER_QUEUE, INVENTORY_ORDER_QUEUE, ORDER_SERVICE_RESPONSE_QUEUE,
+                    FINANCIAL_ROLLBACK_QUEUE)
 from database import Database
-
-from utils import use_thread
 
 ROLLED_BACK = 'rolled_back'
 COMMITTED = 'committed'
@@ -27,13 +27,13 @@ class Transaction:
         self.order_id = order_id
         self.status = PENDING
 
-    def commit(self):
-        self.account.commit_transaction(self)
-        self.status = COMMITTED
+    def commit(self, db):
+        self.account.commit_transaction(self, db)
+        db.update_transaction(self.id, status=COMMITTED)
 
-    def rollback(self):
-        self.account.rollback_transaction(self)
-        self.status = ROLLED_BACK
+    def rollback(self, db):
+        self.account.rollback_transaction(self, db)
+        db.update_transaction(self.id, status=ROLLED_BACK)
 
 
 class Account:
@@ -42,29 +42,26 @@ class Account:
         self.id = _id
         self.transactions = {}
 
-    def increase_balance(self, amount):
-        self.balance += amount
+    def increase_balance(self, amount, db):
+        new_balance = self.balance + amount
+        db.update_account(self.id, balance=new_balance)
 
-    def decrease_balance(self, amount):
+    def decrease_balance(self, amount, db):
         if self.balance > amount:
-            self.balance -= amount
+            new_balance = self.balance - amount
+            db.update_account(self.id, balance=new_balance)
             return
         raise InsufficientBalanceException()
 
-    def commit_transaction(self, transaction):
-        self.decrease_balance(transaction.amount)
-        self.transactions[transaction.id] = transaction
+    def commit_transaction(self, transaction, db):
+        self.decrease_balance(transaction.amount, db)
 
-    def rollback_transaction(self, transaction):
-        try:
-            self.transactions.pop(transaction.id)
-            self.increase_balance(transaction.amount)
-        except KeyError:
-            pass
+    def rollback_transaction(self, transaction, db):
+        # db.delete_transaction(transaction.id)
+        self.increase_balance(transaction.amount, db)
 
 
 class FinancialDatabase(Database):
-
     class Meta:
         objs = (
             Account,
@@ -72,7 +69,10 @@ class FinancialDatabase(Database):
         )
 
     def get_transaction_by_order_id(self, order_id):
+        self.read_from_storage()
         for transaction in self.transaction_storage.values():
+            # print('getting transaction by order id')
+            # print(transaction.order_id, order_id)
             if transaction.order_id == order_id:
                 return transaction
         else:
@@ -80,34 +80,66 @@ class FinancialDatabase(Database):
 
 
 class FinancialService:
-    def __init__(self, db, order_service=None, inventory_service=None):
+    def __init__(self, db: FinancialDatabase, rabbit_interface: RabbitWrapper):
         self.db = db
-        self.order_service = order_service
-        self.inventory_service = inventory_service
+        self.rabbit_interface = rabbit_interface
 
-    @use_thread
-    def place_order(self, order_id, amount, account_id, quantity):
-        sleep(2)
+    # @use_thread
+    def start_place_order_consumer(self):
+        self.rabbit_interface.consume_continuously(FINANCIAL_ORDER_QUEUE, self.place_order)
+
+    # @use_thread
+    def start_rollback_order_consumer(self):
+        self.rabbit_interface.consume_continuously(FINANCIAL_ROLLBACK_QUEUE, self.process_rollback_order)
+
+    # @use_thread
+    def place_order(self, ch, method, props, body):
         print('Financial Service: placing order')
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        order = json.loads(body)
+        # print('ack done')
         try:
-            transaction = self.db.create_transaction(order_id, amount, self.db.get_account(account_id))
-            transaction.commit()
-            print('Financial Service: transaction committed, calling inventory')
-            self.inventory_service.place_order(order_id, quantity)
+            account = self.db.get_account(order['account_id'])
+            transaction = self.db.create_transaction(order['order_id'], order['order_price'], account)
+            # print('tran done')
+            transaction.commit(self.db)
+            # print(f'fFinancial Service: transaction committed, calling inventory, order id: {transaction.order_id}, transaction id: {transaction.id}')
+            self.rabbit_interface.publish(INVENTORY_ORDER_QUEUE,
+                                          json.dumps(dict(order_id=order['order_id'], quantity=order['quantity'])))
+            # print('inv published')
+            # self.inventory_service.place_order(order['order_id'], order['quantity'])
         except InsufficientBalanceException as e:
             print('Financial service: calling inventory failed with Insufficient Balance Exception, rejecting order')
-            self.order_service.reject_order(order_id)
+            self.rabbit_interface.publish(
+                ORDER_SERVICE_RESPONSE_QUEUE.format(order_id=order['order_id']),
+                json.dumps(dict(order_id=order['order_id'], status='rejected', reason=str(e))), queue_auto_delete=True)
+            # self.order_service.reject_order(order['order_id'])
+        except Exception as e:
+            # print(e)
+            print('going to rollback in financial')
+            self.rollback_order(order['order_id'])
 
-    @use_thread
+    # @use_thread
+    def process_rollback_order(self, ch, method, props, body):
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        message = json.loads(body)
+        self.rollback_order(message['order_id'])
+
+    # @use_thread
     def rollback_order(self, order_id):
-        print('Financial service, rolling back order')
+        print(f'Financial service, rolling back order, with order id : {order_id}')
         try:
+            print(self.db.transaction_storage)
             transaction = self.db.get_transaction_by_order_id(order_id)
-            transaction.rollback()
+            print(vars(self.db.transaction_storage[transaction.id]))
+            print(self.db.transaction_storage)
+            transaction.rollback(self.db)
         except TransactionNotFoundException:
             print('Financial service: no such transaction found')
         print('Financial service, rejecting order in order service')
-        self.order_service.reject_order(order_id)
+        self.rabbit_interface.publish(ORDER_SERVICE_RESPONSE_QUEUE.format(order_id=order_id), json.dumps(
+            dict(order_id=order_id, status='rejected', reason='Financial service rolled back order')), queue_auto_delete=True)
+        # self.order_service.reject_order(order_id)
 
     def create_account(self, balance=100):
         return self.db.create_account(balance=balance)
