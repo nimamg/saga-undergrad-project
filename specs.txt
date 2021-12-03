@@ -1,0 +1,53 @@
+Order {
+    PlaceOrder(quantity, account_id) {
+        # create_order()
+        publish_financial_place_order(order_id, account_id, order_price, quantity)
+        consume_order_response()
+        # change_order_state()
+    } return (order_status)
+}
+
+Financial {
+    PlaceOrder(order_id, account_id, order_price, quantity) {
+        # create_transaction()
+        # change_balance()
+        publish_inventory_place_order(order_id, quantity)
+    } return (order_status)
+
+    ConsumePlaceOrder(message) {
+        PlaceOrder(message.order_id, message.account_id, message.order_price, message.quantity)
+    }
+
+    RollbackOrder(order_id) {
+        # change_transaction_state()
+        # change_balance()
+        publish_order_rejected(order_id)
+    }
+
+    ConsumeOrderRejected(message) {
+        RollbackOrder(message.order_id)
+    }
+}
+
+Inventory {
+    PlaceOrder(order_id, quantity) {
+        # create_record()
+        # change_inventory_stock()
+        publish_order_completed(order_id)
+    } return (order_status)
+
+    ConsumePlaceOrder(message) {
+        PlaceOrder(message.order_id, message.quantity)
+    }
+
+    RollbackOrder(order_id) {
+        # change_record_state()
+        # change_inventory_stock()
+        publish_financial_rollback_order(order_id)
+    }
+
+    ConsumeRollbackOrder(message) {
+        RollbackOrder(message.order_id)
+    }
+}
+
