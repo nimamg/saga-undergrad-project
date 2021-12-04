@@ -12,7 +12,7 @@ Financial {
         # create_transaction()
         # change_balance()
         publish_inventory_place_order(order_id, quantity)
-    } return (order_status)
+    }
 
     ConsumePlaceOrder(message) {
         PlaceOrder(message.order_id, message.account_id, message.order_price, message.quantity)
@@ -34,7 +34,7 @@ Inventory {
         # create_record()
         # change_inventory_stock()
         publish_order_completed(order_id)
-    } return (order_status)
+    }
 
     ConsumePlaceOrder(message) {
         PlaceOrder(message.order_id, message.quantity)
