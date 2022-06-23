@@ -1,0 +1,46 @@
+services:
+  - name: OrderService
+    methods:
+      - name: place_order
+        role: initiator
+        publishes:
+          name: PlaceTransaction
+        consumes: OrderResponse
+        timeout: 5
+        rollbacks:
+          - name: FinancialRollback
+          - name: InventoryRollback
+  - name: FinancialService
+    methods:
+      - name: place_transaction
+        role: participant
+        trigger: PlaceTransaction
+        publishes:
+          name: ReleaseFromStock
+#        rollbacks:
+#          - name: OrderResponse
+#            data:
+#              status: failed
+      - name: financial_rollback
+        role: rollbacker
+        trigger: FinancialRollback
+        publishes:
+          name: OrderResponse
+          data:
+            status: failed
+  - name: InventoryService
+    methods:
+      - name: release_from_stock
+        role: participant
+        trigger: ReleaseFromStock
+        publishes:
+          name: OrderResponse
+          data:
+            status: success
+#        rollbacks:
+#          - FinancialRollback
+      - name: inventory_rollback
+        role: rollbacker
+        trigger: InventoryRollback
+        publishes:
+          name: FinancialRollback

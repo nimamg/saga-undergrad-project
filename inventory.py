@@ -1,9 +1,10 @@
 import json
+import time
 from time import sleep
 
 from broker import RabbitWrapper, INVENTORY_ORDER_QUEUE, INVENTORY_ROLLBACK_QUEUE, FINANCIAL_ROLLBACK_QUEUE, ORDER_SERVICE_RESPONSE_QUEUE
 from database import Database
-from utils import use_thread
+from utils import use_thread, ServiceWithDowntime
 
 
 class InsufficientResourceException(Exception):
@@ -38,15 +39,15 @@ class InventoryDatabase(Database):
     def get_sell_record_by_order_id(self, order_id):
         self.read_from_storage()
         for sell_record in self.sell_record_storage.values():
-            print('getting sell record by order id')
             if sell_record.order_id == order_id:
                 return sell_record
         else:
             raise SellRecordNotFoundException()
 
 
-class InventoryService:
-    def __init__(self, db: InventoryDatabase, rabbit_interface: RabbitWrapper):
+class InventoryService(ServiceWithDowntime):
+    def __init__(self, db: InventoryDatabase, rabbit_interface: RabbitWrapper, downtimes):
+        super(InventoryService, self).__init__(downtimes)
         self.rabbit_interface = rabbit_interface
         self.db = db
 
@@ -62,13 +63,15 @@ class InventoryService:
 
     # @use_thread
     def place_order(self, ch, method, props, body):
-        ch.basic_ack(delivery_tag=method.delivery_tag)
         message = json.loads(body)
+        if not self.is_available_during(message['time'], message['time'] + 1):
+            return
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
-        print('Inventory service: placing order')
+        # print('Inventory service: placing order')
         stock = self.db.get_stock(self.stock.id)
         if stock.quantity < message['quantity']:
-            print('Inventory service, failure, rolling back order')
+            # print('Inventory service, failure, rolling back order')
             self.rabbit_interface.publish(INVENTORY_ROLLBACK_QUEUE, json.dumps({'order_id': message['order_id']}))
             # self.financial_service.rollback_order(order_id)
             return
@@ -99,9 +102,24 @@ class InventoryService:
         self.rollback_order(message['order_id'])
 
     def rollback_order(self, order_id):
-        sell_record = self.db.get_sell_record_by_order_id(order_id)
-        current_quantity = self.db.get_stock(self.stock.id).quantity
-        self.db.update_stock(self.stock.id, quantity=current_quantity + sell_record.quantity)
-        self.db.delete_sell_record(sell_record.id)
+        try:
+            sell_record = self.db.get_sell_record_by_order_id(order_id)
+            current_quantity = self.db.get_stock(self.stock.id).quantity
+            self.db.update_stock(self.stock.id, quantity=current_quantity + sell_record.quantity)
+            self.db.delete_sell_record(sell_record.id)
+        except SellRecordNotFoundException:
+            print('this order was not recorded')
         # publish to financial service
         self.rabbit_interface.publish(FINANCIAL_ROLLBACK_QUEUE, json.dumps({'order_id': order_id}))
+
+
+def inventory_starter(downtimes):
+    print('Inventory starting')
+    inventory_service = InventoryService(InventoryDatabase('inv_db'), RabbitWrapper(), downtimes)
+    inventory_service.start_place_order_consumer()
+    inventory_service.start_rollback_order_consumer()
+    time.sleep(3)
+    print('Inventory DB:')
+    inventory_service.db.print_objs()
+    print('Inventory Done')
+    exit(0)

@@ -1,0 +1,12 @@
+request_time: 5
+downtimes:
+  - name: financial
+    intervals:
+      - start: 6
+        end: 8
+      - start: 12
+        end: 18
+  - name: inventory
+    intervals:
+      - start: 9
+        end: 11

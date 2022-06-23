@@ -8,7 +8,7 @@ SUCCESSFUL = 'successful'
 REJECTED = 'rejected'
 
 PRICE = 100
-TIMEOUT_SECONDS = 5
+TIMEOUT_SECONDS = 3
 POLL_INTERVAL_SECONDS = 0.1
 
 
@@ -32,16 +32,17 @@ class OrderService:
         self.db = db
         self.rabbit_interface = rabbit_interface
 
-    def place_order(self, quantity, account_id):
-        print('Order Service: placing order')
+    def place_order(self, quantity, account_id, time):
+        # print('Order Service: placing order')
         order = self.db.create_order(quantity)
         try:
-            print('Order Service: calling financial')
+            # print(f'Order Service: calling financial with order id {order.id}')
             message = {
                 'order_id': order.id,
                 'account_id': account_id,
                 'order_price': order.price,
                 'quantity': order.quantity,
+                'time': time,
             }
             self.rabbit_interface.publish(FINANCIAL_ORDER_QUEUE, json.dumps(message))
         except Exception as e:
@@ -62,17 +63,26 @@ class OrderService:
             return 'Failure'
 
     def complete_order(self, order_id):
-        print('Order Service: Completing order')
+        # print('Order Service: Completing order')
         order = self.db.get_order(order_id)
         if order.status != PENDING:
             raise Exception('Can\'t complete order')
         self.db.update_order(_id=order_id, status=SUCCESSFUL)
 
     def reject_order(self, order_id):
-        print('Order Service: Rejecting order')
+        # print('Order Service: Rejecting order')
         self.rabbit_interface.publish(FINANCIAL_ROLLBACK_QUEUE, json.dumps({'order_id': order_id}))
         self.rabbit_interface.publish(INVENTORY_ROLLBACK_QUEUE, json.dumps({'order_id': order_id}))
         order = self.db.get_order(order_id)
         if order.status == SUCCESSFUL:
             raise Exception
         self.db.update_order(_id=order_id, status=REJECTED)
+
+
+def order_starter(quantity, account_id, time):
+    order_service = OrderService(OrderDatabase('order_db', True), RabbitWrapper())
+    res = order_service.place_order(quantity, account_id, time)
+    print('Order Service: Order result:', res)
+    print('Order DB:')
+    order_service.db.print_objs()
+    exit(0)

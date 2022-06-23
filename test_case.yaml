@@ -1,0 +1,32 @@
+test_cases:
+- downtimes:
+  - interval:
+      end: 7
+      start: 1
+    service: FinancialService
+  request_time: 4
+  test_case_name: FinancialService place_transaction before event
+- downtimes:
+  - interval:
+      end: 14
+      start: 10
+    service: FinancialService
+  request_time: 9
+  test_case_name: FinancialService place_transaction down during event
+- downtimes:
+  - interval:
+      end: 10
+      start: 2
+    service: InventoryService
+  request_time: 6
+  test_case_name: InventoryService release_from_stock before event
+- downtimes:
+  - interval:
+      end: 15
+      start: 11
+    service: InventoryService
+  request_time: 10
+  test_case_name: InventoryService release_from_stock down during event
+- downtimes: []
+  request_time: 5
+  test_case_name: Happy Path

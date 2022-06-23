@@ -1,8 +1,10 @@
 import json
+import time
 
 from broker import (RabbitWrapper, FINANCIAL_ORDER_QUEUE, INVENTORY_ORDER_QUEUE, ORDER_SERVICE_RESPONSE_QUEUE,
                     FINANCIAL_ROLLBACK_QUEUE)
 from database import Database
+from utils import ServiceWithDowntime
 
 ROLLED_BACK = 'rolled_back'
 COMMITTED = 'committed'
@@ -54,6 +56,7 @@ class Account:
         raise InsufficientBalanceException()
 
     def commit_transaction(self, transaction, db):
+        self.transactions[transaction.id] = transaction
         self.decrease_balance(transaction.amount, db)
 
     def rollback_transaction(self, transaction, db):
@@ -69,7 +72,7 @@ class FinancialDatabase(Database):
         )
 
     def get_transaction_by_order_id(self, order_id):
-        self.read_from_storage()
+        # self.read_from_storage()
         for transaction in self.transaction_storage.values():
             # print('getting transaction by order id')
             # print(transaction.order_id, order_id)
@@ -79,8 +82,9 @@ class FinancialDatabase(Database):
             raise TransactionNotFoundException()
 
 
-class FinancialService:
-    def __init__(self, db: FinancialDatabase, rabbit_interface: RabbitWrapper):
+class FinancialService(ServiceWithDowntime):
+    def __init__(self, db: FinancialDatabase, rabbit_interface: RabbitWrapper, downtimes):
+        super(FinancialService, self).__init__(downtimes)
         self.db = db
         self.rabbit_interface = rabbit_interface
 
@@ -94,30 +98,37 @@ class FinancialService:
 
     # @use_thread
     def place_order(self, ch, method, props, body):
-        print('Financial Service: placing order')
-        ch.basic_ack(delivery_tag=method.delivery_tag)
+        # print('Financial Service: placing order')
         order = json.loads(body)
+        # print(f'FINANCIAL: Order time is {order["time"]}')
+        # print(f'FINANCIAL: is available? {self.is_available_during(order["time"], order["time"] + 1)}')
+        if not self.is_available_to_start(order['time']):
+            return
+        ch.basic_ack(delivery_tag=method.delivery_tag)
         # print('ack done')
         try:
             account = self.db.get_account(order['account_id'])
             transaction = self.db.create_transaction(order['order_id'], order['order_price'], account)
             # print('tran done')
             transaction.commit(self.db)
-            # print(f'fFinancial Service: transaction committed, calling inventory, order id: {transaction.order_id}, transaction id: {transaction.id}')
-            self.rabbit_interface.publish(INVENTORY_ORDER_QUEUE,
-                                          json.dumps(dict(order_id=order['order_id'], quantity=order['quantity'])))
+            # print(f'Financial Service: transaction committed, calling inventory, order id: {transaction.order_id}, transaction id: {transaction.id}')
+            if self.is_available_until_end(order['time'], order['time'] + 1):
+                self.rabbit_interface.publish(INVENTORY_ORDER_QUEUE,
+                                          json.dumps(dict(order_id=order['order_id'], quantity=order['quantity'], time=order['time'])))
             # print('inv published')
             # self.inventory_service.place_order(order['order_id'], order['quantity'])
         except InsufficientBalanceException as e:
-            print('Financial service: calling inventory failed with Insufficient Balance Exception, rejecting order')
+            # print('Financial service: calling inventory failed with Insufficient Balance Exception, rejecting order')
             self.rabbit_interface.publish(
                 ORDER_SERVICE_RESPONSE_QUEUE.format(order_id=order['order_id']),
                 json.dumps(dict(order_id=order['order_id'], status='rejected', reason=str(e))), queue_auto_delete=True)
             # self.order_service.reject_order(order['order_id'])
-        except Exception as e:
-            # print(e)
-            print('going to rollback in financial')
-            self.rollback_order(order['order_id'])
+        # except Exception as e:
+        #     print('Exception!!! #*************############*****************###########')
+        #     print(e)
+        #     print('&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&')
+        #     print('going to rollback in financial')
+        #     self.rollback_order(order['order_id'])
 
     # @use_thread
     def process_rollback_order(self, ch, method, props, body):
@@ -130,16 +141,32 @@ class FinancialService:
         print(f'Financial service, rolling back order, with order id : {order_id}')
         try:
             print(self.db.transaction_storage)
+            print('&&&&&&&&&&&&&&&&&&&&&&')
+            for i, j in self.db.transaction_storage.items():
+                print(i, vars(j))
             transaction = self.db.get_transaction_by_order_id(order_id)
             print(vars(self.db.transaction_storage[transaction.id]))
-            print(self.db.transaction_storage)
+            # print(self.db.transaction_storage)
             transaction.rollback(self.db)
         except TransactionNotFoundException:
             print('Financial service: no such transaction found')
-        print('Financial service, rejecting order in order service')
+        # print('Financial service, rejecting order in order service')
         self.rabbit_interface.publish(ORDER_SERVICE_RESPONSE_QUEUE.format(order_id=order_id), json.dumps(
             dict(order_id=order_id, status='rejected', reason='Financial service rolled back order')), queue_auto_delete=True)
         # self.order_service.reject_order(order_id)
 
     def create_account(self, balance=100):
         return self.db.create_account(balance=balance)
+
+
+def financial_starter(downtimes):
+    # print('Financial starting with downtime: ', downtimes)
+    financial_service = FinancialService(FinancialDatabase('fin_db'), RabbitWrapper(), downtimes)
+    financial_service.create_account(1000000)
+    financial_service.start_place_order_consumer()
+    financial_service.start_rollback_order_consumer()
+    time.sleep(4)
+    print('Financial DB:')
+    financial_service.db.print_objs()
+    print('Financial Done')
+    exit(0)

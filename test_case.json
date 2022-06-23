@@ -1,0 +1,9 @@
+{
+    "request_time": 5,
+    "downtimes": {
+        "financial": {
+            "start": 6,
+            "end": 8
+        }
+    }
+}

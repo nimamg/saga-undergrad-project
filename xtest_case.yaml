@@ -1,0 +1,27 @@
+test_cases:
+  - downtimes:
+    - end: 6
+      start: 2
+      name: Financial
+    request_time: 3
+    test_case_name: Financial-place-transaction-before-event
+  - downtimes:
+    - interval:
+        end: 17
+        start: 13
+      name: Financial
+    request_time: 12
+    test_case_name: Financial-place-transaction-during-event
+  - downtimes:
+    - end: 15
+      start: 10
+    name: Inventory
+    request_time: 11
+    test_case_name: Inventory-release-from-stock-before-event
+  - downtimes:
+    - interval:
+        end: 15
+        start: 11
+    name: Inventory
+    request_time: 10
+    test_case_name: Inventory-release-from-stock-during-event
