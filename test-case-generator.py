@@ -29,28 +29,30 @@ def generate_test_cases(methods):
             if method['role'] == 'initiator' and method['consumes'] == publishes:
                 break
             if method['role'] == 'participant' and method['trigger'] == publishes:
-                request_time = random.randint(1, 10) + time_spent
+                request_time = random.randint(1, 10)
+                request_arrival_time = request_time + time_spent
                 # Service Down before getting event
                 test_cases.append({
                     'request_time': request_time,
                     'test_case_name': f'{method["service"]} {method["name"]} before event',
                     'downtimes': [{
                         'interval': {
-                            'start': max(request_time - random.randint(1, 4), 1),
-                            'end': request_time + random.randint(3, 5)
+                            'start': max(request_arrival_time - random.randint(1, 4), 1),
+                            'end': request_arrival_time + random.randint(3, 5)
                         },
                         'service': method['service'],
                     }]
                 })
                 # Service Down while processing event
-                request_time = random.randint(1, 10) + time_spent
+                request_time = random.randint(1, 10)
+                request_arrival_time = request_time + time_spent
                 test_cases.append({
                     'request_time': request_time,
                     'test_case_name': f'{method["service"]} {method["name"]} down during event',
                     'downtimes': [{
                         'interval': {
-                            'start': request_time + 1,
-                            'end': request_time + random.randint(4, 7)
+                            'start': request_arrival_time + 1,
+                            'end': request_arrival_time + random.randint(4, 7)
                         },
                         'service': method['service'],
                     }]
